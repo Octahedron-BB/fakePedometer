@@ -1,0 +1,13 @@
+.env
+session.json
+my_steps_db.json
+
+__pycache__/
+*.pyc
+
+
+dist/
+build/
+*.spec
+
+.DS_Store
