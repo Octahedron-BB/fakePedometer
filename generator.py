@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import os
 
 DB_FILE = "my_steps_db.json"
+HISTORY_FILE = "captured_history.json" 
 
 class HumanGenerator:
     def __init__(self, session):
@@ -14,7 +15,15 @@ class HumanGenerator:
         self.weight = float(session.get("weight", 60.0))
         self.token = session.get("accessToken")
         self.device_serial = session.get("deviceSerial")
+        
+        # 初始序号
+        self.last_day_id = int(session.get("lastDayId", 5))
+        self.last_hour_id = int(session.get("lastHourId", 60))
+        self.last_sync_date = session.get("lastSyncDate", datetime.now().strftime("%Y%m%d"))
+        
         self.db = self.load_db()
+        # 1. 先同步硬件数据
+        self.sync_from_capture()
 
     def load_db(self):
         if os.path.exists(DB_FILE):
@@ -35,183 +44,186 @@ class HumanGenerator:
             }
         return self.db[date_str]
 
+    def sync_from_capture(self):
+        """同步硬件抓包数据并执行安全校验"""
+        if not os.path.exists(HISTORY_FILE): return
+        
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            capture = json.load(f)
+            
+        print(f"[*] 正在从 {HISTORY_FILE} 合并硬件数据...")
+        
+        # 1. 序号防倒退机制：只取最大值
+        cap_day = int(capture.get("dayPackage", 0))
+        cap_hour = int(capture.get("hourPackage", 0))
+        
+        self.last_day_id = max(self.last_day_id, cap_day)
+        self.last_hour_id = max(self.last_hour_id, cap_hour)
+
+        # 2. 合并步数数据 (保护机制：只覆盖本地为 0 的空数据)
+        for h_item in capture.get("listhour", []):
+            d_str = h_item["walkdate"]
+            day_data = self.get_or_create_day(d_str)
+            for i in range(26):
+                h_key = f"hour{i}"
+                # 如果硬件有数据，并且本地对应小时还是 0，才进行合并
+                if h_item.get(h_key) and h_item[h_key] != "0,0,0,0,0,0":
+                    if day_data["listhour"][h_key] == "0,0,0,0,0,0":
+                        day_data["listhour"][h_key] = h_item[h_key]
+
+        # 3. 合并处方状态
+        for r_item in capture.get("listRecipeData", []):
+            d_str = r_item["walkdate"]
+            day_data = self.get_or_create_day(d_str)
+            if r_item.get("task1state") == 1: day_data["is_morning_done"] = True
+            if r_item.get("task5state") == 1: day_data["is_afternoon_done"] = True
+            
+        self.save_db()
+        
+        # 4. 【关键】阅后即焚/归档，防止下次无限循环读取旧文件
+        try:
+            bak_filename = f"captured_history_{int(time.time())}.bak"
+            os.rename(HISTORY_FILE, bak_filename)
+            print(f"[+] 抓包文件已处理完毕并归档为: {bak_filename} (防止重复读取)")
+        except Exception as e:
+            print(f"[!] 归档失败，请下次运行前手动删除 {HISTORY_FILE}。错误: {e}")
+
     def calculate_physics(self, steps, is_task):
-        if steps == 0: return 0, 0.0, 0, 0
-        if is_task:
-            cadence = random.randint(115, 138)
-            eff_rate, fast_rate = random.uniform(0.96, 0.99), random.uniform(0.92, 0.98)
-            ex_factor = 1.6
-        else:
-            cadence = random.randint(60, 95)
-            eff_rate, fast_rate = random.uniform(0.30, 0.65), random.uniform(0.0, 0.10)
-            ex_factor = 0.7
-        w_time = max(1, steps // cadence)
+        if steps <= 0: return 0, 0.0, 0, 0
+        cadence = random.randint(115, 138) if is_task else random.randint(60, 95)
+        eff_rate = random.uniform(0.96, 0.99) if is_task else random.uniform(0.30, 0.65)
+        fast_rate = random.uniform(0.92, 0.98) if is_task else random.uniform(0.0, 0.10)
+        ex_factor = 1.6 if is_task else 0.7
+        w_time = max(1, int(steps // cadence))
         return w_time, round((steps * self.step_width) / 100000 * ex_factor, 2), int(steps * eff_rate), int(steps * fast_rate)
 
-    def generate_full_day(self, date_str):
-        """核心新增：为过去的某一天模拟完整数据"""
-        print(f"[*] 正在补齐缺失日期数据: {date_str} ...")
+    def complete_historical_day(self, date_str):
+        """对【往日】执行全量补全"""
+        print(f"[*] 正在全量补全历史日期: {date_str}")
         day_data = self.get_or_create_day(date_str)
         hours_db = day_data["listhour"]
+        if not day_data["is_morning_done"]:
+            steps = random.randint(3200, 3600); _, _, eff, fst = self.calculate_physics(steps, True)
+            hours_db["hour7"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
+            day_data["is_morning_done"] = True
+        if not day_data["is_afternoon_done"]:
+            steps = random.randint(4100, 4800); _, _, eff, fst = self.calculate_physics(steps, True)
+            hours_db["hour18"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
+            day_data["is_afternoon_done"] = True
         
-        # 1. 模拟朝朝任务 (固定在 07:00 或 08:00)
-        task_hour = random.choice([7, 8])
-        steps = random.randint(3200, 3600)
-        _, _, eff, fst = self.calculate_physics(steps, True)
-        hours_db[f"hour{task_hour}"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
-        day_data["is_morning_done"] = True
+        total_s = sum([int(v.split(',')[0]) for k, v in hours_db.items() if k.startswith('hour')])
+        if total_s < 10500:
+            gap = 10800 - total_s; target_h = random.choice([10, 14, 16, 20])
+            orig_s = int(hours_db[f"hour{target_h}"].split(',')[0]); new_s = orig_s + gap
+            _, _, eff, fst = self.calculate_physics(new_s, is_task=(new_s > 3000))
+            hours_db[f"hour{target_h}"] = f"{new_s},{new_s*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
 
-        # 2. 模拟下午/晚间任务 (固定在 15:00 - 19:00)
-        task_hour = random.randint(15, 19)
-        steps = random.randint(3800, 4800)
-        _, _, eff, fst = self.calculate_physics(steps, True)
-        hours_db[f"hour{task_hour}"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
-        day_data["is_afternoon_done"] = True
-
-        # 3. 随机填补 3-5 个日常活跃小时
-        fill_slots = random.sample([9, 10, 11, 13, 14, 16, 17, 20, 21], random.randint(3, 5))
-        for slot in fill_slots:
-            if hours_db[f"hour{slot}"] == "0,0,0,0,0,0":
-                steps = random.randint(300, 1500)
-                _, _, eff, fst = self.calculate_physics(steps, False)
-                hours_db[f"hour{slot}"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
-        
-        return date_str
-
-    def generate_incremental(self):
-        """增量生成当天步数（只填补还没生成的过去小时）"""
-        now = datetime.now()
-        date_str = now.strftime("%Y%m%d")
-        day_data = self.get_or_create_day(date_str)
-        current_hour = now.hour
+    def generate_today_incremental(self):
+        """对【当日】执行增量填充 (只填充过去的小时)"""
+        now = datetime.now(); date_str = now.strftime("%Y%m%d")
+        print(f"[*] 正在对今日执行增量模拟: {date_str}")
+        day_data = self.get_or_create_day(date_str); current_hour = now.hour
         hours_db = day_data["listhour"]
-        
         empty_past_hours = [h for h in range(7, current_hour) if hours_db[f"hour{h}"] == "0,0,0,0,0,0"]
         
-        if not empty_past_hours:
-            print("[*] 当前时间之前的数据已生成完毕，无需新增。")
-            return date_str
-
-        # 逻辑同前，填补朝朝、下午和日常...
         if current_hour >= 8 and not day_data["is_morning_done"]:
             available = [h for h in empty_past_hours if h in [7, 8]]
             if available:
-                slot = random.choice(available)
-                steps = random.randint(3200, 3600)
+                slot = random.choice(available); steps = random.randint(3200, 3600)
                 _, _, eff, fst = self.calculate_physics(steps, True)
                 hours_db[f"hour{slot}"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
                 day_data["is_morning_done"] = True
                 if slot in empty_past_hours: empty_past_hours.remove(slot)
 
-        if current_hour >= 16 and not day_data["is_afternoon_done"]:
-            available = [h for h in empty_past_hours if h in [15, 16]]
-            if available:
-                slot = random.choice(available)
-                steps = random.randint(3800, 4500)
-                _, _, eff, fst = self.calculate_physics(steps, True)
-                hours_db[f"hour{slot}"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
-                day_data["is_afternoon_done"] = True
-                if slot in empty_past_hours: empty_past_hours.remove(slot)
-
         for slot in empty_past_hours:
-            if random.random() > 0.4: # 60% 概率活跃
-                steps = random.randint(200, 1200)
-                _, _, eff, fst = self.calculate_physics(steps, False)
+            if random.random() > 0.4:
+                steps = random.randint(200, 1200); _, _, eff, fst = self.calculate_physics(steps, False)
                 hours_db[f"hour{slot}"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
-
-        self.save_db()
-        return date_str
 
     def calculate_daily_summary(self, date_str):
         hours_db = self.db[date_str]["listhour"]
         total_s, total_eff, total_fast, total_time, total_ex = 0, 0, 0, 0, 0.0
-        morning_sum = 0
+        
         for i in range(26):
-            data_str = hours_db.get(f"hour{i}", "0,0,0,0,0,0")
-            parts = [int(x) for x in data_str.split(",")]
+            parts = [int(x) for x in hours_db[f"hour{i}"].split(",")]
             if parts[0] > 0:
-                steps, _, fast_s, _, eff_s, _ = parts
-                wt, ex, _, _ = self.calculate_physics(steps, is_task=(steps>3000))
-                total_s += steps
-                total_eff += eff_s
-                total_fast += fast_s
-                total_time += wt
-                total_ex += ex
-                if i in [5, 6, 7, 8]: morning_sum += steps
-
+                s, _, f_s, _, e_s, _ = parts
+                wt, ex, _, _ = self.calculate_physics(s, is_task=(s > 3000))
+                total_s += s; total_eff += e_s; total_fast += f_s; total_time += wt; total_ex += ex
+                
         return {
-            "stepNumber": total_s, "walkDistance": total_s * self.step_width,
-            "remaineffectiveSteps": total_eff, "faststepnum": total_fast,
-            "walkdate": date_str, "stepWidth": self.step_width, "weight": self.weight,
-            "walkTime": total_time, "exerciseAmount": round(total_ex, 2),
-            "calorieConsumed": round(total_s * 0.04, 2), "fatConsumed": round(total_s * 0.005, 2),
+            "calorieConsumed": float(round(total_s * 0.04, 2)),
+            "exerciseAmount": float(round(total_ex, 2)),
+            "faststepnum": int(total_fast),
+            "fatConsumed": float(round(total_s * 0.005, 2)),
+            "goalStepNum": 10000, 
+            "remaineffectiveSteps": int(total_eff),
+            "stepNumber": int(total_s),
+            "stepWidth": self.step_width,
+            "walkDistance": int(total_s * self.step_width),
+            "walkTime": int(total_time),
+            "walkdate": date_str,
+            "weight": self.weight,
             "zmrule": "5,6,7,8#3000;17,18,19,20,21,22#4000",
-            "zmstatus": "1,0" if morning_sum >= 3000 else "0,0"
+            "zmstatus": "0,0"
         }
 
     def build_payload(self):
-        # 1. 检查并补齐缺失的往日数据 (检查最近 3 天)
-        today = datetime.now()
-        for i in range(1, 3): 
-            past_date = (today - timedelta(days=i)).strftime("%Y%m%d")
-            if past_date not in self.db:
-                self.generate_full_day(past_date)
+        today_str = datetime.now().strftime("%Y%m%d")
         
-        # 2. 进行当天的增量生成
-        today_str = self.generate_incremental()
+        # --- 新增：跨天自动推进 dayPackage ---
+        if today_str > self.last_sync_date:
+            d1 = datetime.strptime(self.last_sync_date, "%Y%m%d")
+            d2 = datetime.strptime(today_str, "%Y%m%d")
+            delta_days = (d2 - d1).days
+            if delta_days > 0:
+                self.last_day_id += delta_days
+                print(f"[*] 检测到距离上次同步跨越了 {delta_days} 天，dayPackage 自动推进至: {self.last_day_id}")
+
+        all_dates = sorted(self.db.keys())
+        for d_str in all_dates:
+            if d_str < today_str:
+                self.complete_historical_day(d_str)
+            elif d_str == today_str:
+                self.generate_today_incremental()
         self.save_db()
 
-        # 3. 打包最近 3 天的所有数据
-        dates_to_upload = sorted(self.db.keys())[-3:] 
         list_day, list_hour, list_recipe = [], [], []
-        
-        for d_str in dates_to_upload:
-            day_summary = self.calculate_daily_summary(d_str)
-            list_day.append(day_summary)
-            h_data = self.db[d_str]["listhour"].copy()
-            h_data["walkdate"] = d_str
-            list_hour.append(h_data)
+        for d_str in all_dates[-7:]:
+            summary = self.calculate_daily_summary(d_str)
+            list_day.append(summary)
+            h_data = self.db[d_str]["listhour"].copy(); h_data["walkdate"] = d_str; list_hour.append(h_data)
+            # 历史日期强制任务成功，今日则看实际情况
+            t_state = 1 if (d_str < today_str or summary["stepNumber"] > 8000) else 0
             list_recipe.append({
-                "recipenumber": 9999, "task1state": 1, "task2state": 1, "task3state": 1, "task4state": 1,
-                "task5state": 2, "task6state": 2, "task7state": 2, "task8state": 2, "walkdate": d_str
+                "recipenumber": 9999, "task1state": t_state, "task2state": t_state, "task3state": t_state, 
+                "task4state": t_state, "task5state": 2, "task6state": 2, "task7state": 2, "task8state": 2, "walkdate": d_str
             })
 
         payload = {
-            "accessToken": self.token,
-            "commond": "newUploadData",
-            "dayPackage": str(self.session["lastDayId"]),
-            "hourPackage": str(int(self.session.get("lastHourId", 39)) + 1),
-            "deviceType": "TW726", "deviceserial": self.device_serial,
-            "reqservicetype": "0", "sequenceID": str(int(time.time())),
-            "clientvison": "6.5.3",
+            "accessToken": self.token, "commond": "newUploadData",
+            "dayPackage": str(self.last_day_id), "hourPackage": str(self.last_hour_id + 1),
+            "deviceType": "TW726", "deviceserial": self.device_serial, "reqservicetype": "0", 
+            "sequenceID": str(int(time.time())), "clientvison": "6.5.3",
             "listRecipeData": list_recipe, "listday": list_day, "listhour": list_hour
         }
         return payload, list_day[-1]
 
     def run(self):
         payload_body, today_summary = self.build_payload()
-        post_data = {
-            "commond": "pcUploadData",
-            "ReqMessageBody": json.dumps(payload_body, separators=(',', ':'))
-        }
-        
-        print(f"[*] 数据整合完毕！本日累计步数: {today_summary['stepNumber']} | 有效: {today_summary['remaineffectiveSteps']}")
-        
+        post_data = {"commond": "pcUploadData", "ReqMessageBody": json.dumps(payload_body, separators=(',', ':'))}
+        print(f"[*] 整合完毕！包含 {len(payload_body['listday'])} 天数据，今日累计: {today_summary['stepNumber']}")
         try:
-            res = requests.post("http://sync.wanbu.com.cn/WanbuDataServer_NEW/PCPedUploadFlowsService", 
-                                data=post_data, timeout=15)
+            res = requests.post("http://sync.wanbu.com.cn/WanbuDataServer_NEW/PCPedUploadFlowsService", data=post_data, timeout=15)
             if '"resultCode":"0000"' in res.text:
                 print("[+] 同步成功！")
                 self.session["lastHourId"] = int(payload_body["hourPackage"])
-                with open("session.json", "w", encoding="utf-8") as f:
-                    json.dump(self.session, f, indent=4)
-                print(f"[*] 通行证序号已自动推进至: {self.session['lastHourId']}")
-            else:
-                print(f"[!] 服务器报错: {res.text}")
-        except Exception as e:
-            print(f"[!] 网络异常: {e}")
+                self.session["lastDayId"] = int(payload_body["dayPackage"])
+                self.session["lastSyncDate"] = datetime.now().strftime("%Y%m%d") 
+                with open("session.json", "w", encoding="utf-8") as f: json.dump(self.session, f, indent=4)
+            else: print(f"[!] 服务器报错: {res.text}")
+        except Exception as e: print(f"[!] 网络异常: {e}")
 
 if __name__ == "__main__":
     if os.path.exists("session.json"):
-        with open("session.json", "r", encoding="utf-8") as f:
-            HumanGenerator(json.load(f)).run()
+        with open("session.json", "r", encoding="utf-8") as f: HumanGenerator(json.load(f)).run()
