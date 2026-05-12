@@ -192,7 +192,8 @@ class HumanGenerator:
             if delta_days > 0:
                 self.last_day_id += delta_days
                 print(f"[*] 检测到距离上次同步跨越了 {delta_days} 天，dayPackage 自动推进至: {self.last_day_id}")
-
+        
+        self.get_or_create_day(today_str)  # 确保今日数据结构存在
         all_dates = sorted(self.db.keys())
         for d_str in all_dates:
             if d_str < today_str:
