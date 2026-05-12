@@ -144,6 +144,9 @@ class HumanGenerator:
         hours_db = self.db[date_str]["listhour"]
         total_s, total_eff, total_fast, total_time, total_ex = 0, 0, 0, 0, 0.0
         
+        m_steps = 0
+        a_steps = 0
+
         for i in range(26):
             parts = [int(x) for x in hours_db[f"hour{i}"].split(",")]
             if parts[0] > 0:
@@ -151,6 +154,14 @@ class HumanGenerator:
                 wt, ex, _, _ = self.calculate_physics(s, is_task=(s > 3000))
                 total_s += s; total_eff += e_s; total_fast += f_s; total_time += wt; total_ex += ex
                 
+                if 5 <= i <= 9:
+                    m_steps += s
+                if 17 <= i <= 22:
+                    a_steps += s
+       
+        zm_m = 1 if m_steps >= 3000 else 0
+        zm_a = 1 if a_steps >= 4000 else 0
+
         return {
             "calorieConsumed": float(round(total_s * 0.04, 2)),
             "exerciseAmount": float(round(total_ex, 2)),
@@ -165,7 +176,7 @@ class HumanGenerator:
             "walkdate": date_str,
             "weight": self.weight,
             "zmrule": "5,6,7,8#3000;17,18,19,20,21,22#4000",
-            "zmstatus": "0,0"
+            "zmstatus": f"{zm_m},{zm_a}"
         }
 
     def build_payload(self):
