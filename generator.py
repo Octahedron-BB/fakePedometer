@@ -113,7 +113,9 @@ class HumanGenerator:
         
         total_s = sum([int(v.split(',')[0]) for k, v in hours_db.items() if k.startswith('hour')])
         if total_s < 10500:
-            gap = 10800 - total_s; target_h = random.choice([10, 14, 16, 20])
+            target_steps = random.randint(10500, 12000)
+            gap = target_steps - total_s
+            target_h = random.choice([10, 14, 16, 20])
             orig_s = int(hours_db[f"hour{target_h}"].split(',')[0]); new_s = orig_s + gap
             _, _, eff, fst = self.calculate_physics(new_s, is_task=(new_s > 3000))
             hours_db[f"hour{target_h}"] = f"{new_s},{new_s*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
