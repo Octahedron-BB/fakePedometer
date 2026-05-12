@@ -13,3 +13,8 @@ build/
 *.spec
 
 .DS_Store
+
+notifier.py
+msg.txt
+auto_run.bat
+run_log.txt
