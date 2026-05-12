@@ -205,7 +205,7 @@ class HumanGenerator:
             list_day.append(summary)
             h_data = self.db[d_str]["listhour"].copy(); h_data["walkdate"] = d_str; list_hour.append(h_data)
             # 历史日期强制任务成功，今日则看实际情况
-            t_state = 1 if (d_str < today_str or summary["stepNumber"] > 8000) else 0
+            t_state = 1 if (d_str < today_str or summary["stepNumber"] > 6000) else 0
             list_recipe.append({
                 "recipenumber": 9999, "task1state": t_state, "task2state": t_state, "task3state": t_state, 
                 "task4state": t_state, "task5state": 2, "task6state": 2, "task7state": 2, "task8state": 2, "walkdate": d_str
