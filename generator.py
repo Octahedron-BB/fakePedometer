@@ -235,7 +235,7 @@ class HumanGenerator:
                 self.session["lastDayId"] = int(payload_body["dayPackage"])
                 self.session["lastSyncDate"] = datetime.now().strftime("%Y%m%d") 
                 with open("session.json", "w", encoding="utf-8") as f: json.dump(self.session, f, indent=4)
-                with open("msg.txt", "w", encoding="utf-8") as f: f.write(f"✅ 万步网同步成功！\n\n📅 日期: {today_summary['walkdate']}\n👣 步数: {today_summary['stepNumber']}\n🔥 卡路里: {today_summary['calorieConsumed']} kcal\n⏱️ 运动时长: {today_summary['walkTime']} 秒")
+                with open("msg.txt", "w", encoding="utf-8") as f: f.write(f"✅ 万步网同步成功！\n\n📅 日期: {today_summary['walkdate']}\n👣 步数: {today_summary['stepNumber']}\n🔥 卡路里: {today_summary['calorieConsumed']} kcal\n⏱️ 运动时长: {today_summary['walkTime']} 分")
             else: 
                 print(f"[!] 服务器报错: {res.text}")
                 with open("msg.txt", "w", encoding="utf-8") as f: f.write(f"❌ 万步网同步失败！\n\n服务器返回: {res.text}")
