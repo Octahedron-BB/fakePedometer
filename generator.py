@@ -192,6 +192,12 @@ class HumanGenerator:
             if delta_days > 0:
                 self.last_day_id += delta_days
                 print(f"[*] 检测到距离上次同步跨越了 {delta_days} 天，dayPackage 自动推进至: {self.last_day_id}")
+                # 自动创建缺失日期的占位数据，后续会被 complete_historical_day 补全
+                for i in range(1, delta_days):
+                    missing_date = (d1 + timedelta(days=i)).strftime("%Y%m%d")
+                    if missing_date not in self.db:
+                        self.get_or_create_day(missing_date)
+                        print(f"[*] 自动创建缺失日期占位: {missing_date}")
         
         self.get_or_create_day(today_str)  # 确保今日数据结构存在
         all_dates = sorted(self.db.keys())
