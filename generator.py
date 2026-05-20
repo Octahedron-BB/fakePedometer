@@ -139,7 +139,7 @@ class HumanGenerator:
 
         for slot in empty_past_hours:
             if random.random() > 0.4:
-                steps = random.randint(600, 1600); _, _, eff, fst = self.calculate_physics(steps, False)
+                steps = random.randint(1200, 2500); _, _, eff, fst = self.calculate_physics(steps, False)
                 hours_db[f"hour{slot}"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
 
     def calculate_daily_summary(self, date_str):
