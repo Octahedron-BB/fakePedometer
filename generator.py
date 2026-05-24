@@ -106,10 +106,10 @@ class HumanGenerator:
             steps = random.randint(3200, 3600); _, _, eff, fst = self.calculate_physics(steps, True)
             hours_db["hour7"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
             day_data["is_morning_done"] = True
-        if not day_data["is_afternoon_done"]:
-            steps = random.randint(4100, 4800); _, _, eff, fst = self.calculate_physics(steps, True)
-            hours_db["hour18"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
-            day_data["is_afternoon_done"] = True
+        # if not day_data["is_afternoon_done"]:
+        #     steps = random.randint(4100, 4800); _, _, eff, fst = self.calculate_physics(steps, True)
+        #     hours_db["hour18"] = f"{steps},{steps*self.step_width},{fst},{fst*self.step_width},{eff},{eff*self.step_width}"
+        #     day_data["is_afternoon_done"] = True
         
         total_s = sum([int(v.split(',')[0]) for k, v in hours_db.items() if k.startswith('hour')])
         if total_s < 10500:
