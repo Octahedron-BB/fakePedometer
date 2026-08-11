@@ -2,6 +2,9 @@ import json
 import urllib.parse
 from mitmproxy import http
 import os
+from datetime import datetime
+
+import accounts
 
 class WanbuInterceptor:
     def request(self, flow: http.HTTPFlow):
@@ -26,11 +29,6 @@ class WanbuInterceptor:
                         
                     data = json.loads(req_msg_body_str)
 
-                    # --- 新增需求：全量备份原始数据 ---
-                    with open("captured_history.json", "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=4, ensure_ascii=False)
-                    print("[+] 📂 完整步数历史已存至: captured_history.json")
-
                     # 3. 提取 session.json 所需参数
                     session_data = {
                         "accessToken": data.get("accessToken"),
@@ -38,21 +36,35 @@ class WanbuInterceptor:
                         # 自动获取当前序号，Generator 会在此基础上累加
                         "lastDayId": int(data.get("dayPackage", 4)),
                         "lastHourId": int(data.get("hourPackage", 38)),
-                        "clientvison": data.get("clientvison", "6.5.3") # 顺手存下版本号
+                        "clientvison": data.get("clientvison", "6.5.3"),  # 顺手存下版本号
+                        # 记录抓包时间，用于判断 token（约 3 天）是否过期
+                        "capturedAt": datetime.now().isoformat(timespec="seconds")
                     }
-                    
+                    serial = session_data["deviceSerial"]
+                    if not serial:
+                        print("[!] 抓包中未找到 deviceserial，跳过该请求。")
+                        return
+
                     # 提取生理参数
                     listday = data.get("listday", [])
                     if listday:
                         # 找最新的那一天提取参数
                         session_data["stepWidth"] = listday[-1].get("stepWidth", 70)
                         session_data["weight"] = listday[-1].get("weight", 60.0)
-                    
-                    # 4. 存储 session.json
-                    with open("session.json", "w", encoding="utf-8") as f:
-                        json.dump(session_data, f, indent=4)
-                        
-                    print("[+] 📦 模拟器凭证 session.json 更新完毕。")
+
+                    # 若该设备已有账户，保留备注名与最近同步日期
+                    old = accounts.load_session(serial)
+                    is_new = old is None
+                    if old:
+                        for k in ("name", "lastSyncDate"):
+                            if old.get(k):
+                                session_data[k] = old[k]
+
+                    # 4. 存储到对应账户目录
+                    accounts.save_session(serial, session_data)
+                    accounts.save_capture(serial, data)
+                    print("[+] 📂 完整步数历史已存至: " + accounts.capture_path(serial))
+                    print(f"[+] 📦 模拟器凭证已更新到账户: {serial} ({'新账户' if is_new else '已有账户'})")
                     
                     # 5. 终极防御：杀掉原始请求
                     flow.kill()

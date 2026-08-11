@@ -27,6 +27,22 @@ def set_proxy(enable=True):
             print("[*] 正在还原 Windows 代理设定...")
             os.system('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f >nul 2>&1')
 
+def _show_accounts():
+    """显示当前已有账户列表"""
+    try:
+        import accounts
+        accts = accounts.list_accounts()
+        if accts:
+            print(f"[*] 当前已有 {len(accts)} 个账户:")
+            for a in accts:
+                label = a["name"] or a["serial"]
+                print(f"    - {label}  {accounts.token_status(a['token_age_days'])}")
+        else:
+            print("[*] 当前还没有账户，本次抓包将创建新账户。")
+    except Exception:
+        pass
+
+
 def main():
     try:
         print("========================================")
@@ -36,10 +52,11 @@ def main():
         # 1. 安全开启代理
         set_proxy(enable=True)
         print("[+] 系统代理已切换至 127.0.0.1:8080")
+        _show_accounts()
         print("\n👉 【操作指示】")
         print("   1. 请现在开启万步网软件。")
         print("   2. 插上计步器，点击“同步”。")
-        print("   3. 看到“成功提取 session.json”后，按下 Ctrl+C 关闭此窗口。\n")
+        print("   3. 看到“模拟器凭证已更新到账户”后，按下 Ctrl+C 关闭此窗口。\n")
         
         # 2. 启动 mitmdump (拦截脚本)
         # 这里会卡住并持续监听，直到用户按下 Ctrl+C

@@ -4,12 +4,13 @@ import time
 import requests
 from datetime import datetime, timedelta
 import os
+import sys
 
-DB_FILE = "my_steps_db.json"
-HISTORY_FILE = "captured_history.json" 
+import accounts
 
 class HumanGenerator:
-    def __init__(self, session):
+    def __init__(self, serial, session):
+        self.serial = serial
         self.session = session
         self.step_width = int(session.get("stepWidth", 70))
         self.weight = float(session.get("weight", 60.0))
@@ -26,14 +27,10 @@ class HumanGenerator:
         self.sync_from_capture()
 
     def load_db(self):
-        if os.path.exists(DB_FILE):
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {}
+        return accounts.load_db(self.serial)
 
     def save_db(self):
-        with open(DB_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.db, f, indent=4)
+        accounts.save_db(self.serial, self.db)
 
     def get_or_create_day(self, date_str):
         if date_str not in self.db:
@@ -46,12 +43,10 @@ class HumanGenerator:
 
     def sync_from_capture(self):
         """同步硬件抓包数据并执行安全校验"""
-        if not os.path.exists(HISTORY_FILE): return
+        capture = accounts.load_capture(self.serial)
+        if capture is None: return
         
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            capture = json.load(f)
-            
-        print(f"[*] 正在从 {HISTORY_FILE} 合并硬件数据...")
+        print(f"[*] 正在从 {accounts.capture_path(self.serial)} 合并硬件数据...")
         
         # 1. 序号防倒退机制：只取最大值
         cap_day = int(capture.get("dayPackage", 0))
@@ -82,11 +77,10 @@ class HumanGenerator:
         
         # 4. 【关键】阅后即焚/归档，防止下次无限循环读取旧文件
         try:
-            bak_filename = f"captured_history_{int(time.time())}.bak"
-            os.rename(HISTORY_FILE, bak_filename)
+            bak_filename = accounts.archive_capture(self.serial)
             print(f"[+] 抓包文件已处理完毕并归档为: {bak_filename} (防止重复读取)")
         except Exception as e:
-            print(f"[!] 归档失败，请下次运行前手动删除 {HISTORY_FILE}。错误: {e}")
+            print(f"[!] 归档失败，请下次运行前手动删除。错误: {e}")
 
     def calculate_physics(self, steps, is_task):
         if steps <= 0: return 0, 0.0, 0, 0
@@ -242,8 +236,9 @@ class HumanGenerator:
                 self.session["lastHourId"] = int(payload_body["hourPackage"])
                 self.session["lastDayId"] = int(payload_body["dayPackage"])
                 self.session["lastSyncDate"] = datetime.now().strftime("%Y%m%d") 
-                with open("session.json", "w", encoding="utf-8") as f: json.dump(self.session, f, indent=4)
-                with open("msg.txt", "w", encoding="utf-8") as f: f.write(f"✅ 万步网同步成功！\n\n📅 日期: {today_summary['walkdate']}\n👣 步数: {today_summary['stepNumber']}\n🔥 卡路里: {today_summary['calorieConsumed']} kcal\n⏱️ 运动时长: {today_summary['walkTime']} 分")
+                accounts.save_session(self.serial, self.session)
+                label = self.session.get("name") or self.serial
+                with open("msg.txt", "w", encoding="utf-8") as f: f.write(f"✅ 万步网同步成功！\n\n👤 账户: {label}\n📅 日期: {today_summary['walkdate']}\n👣 步数: {today_summary['stepNumber']}\n🔥 卡路里: {today_summary['calorieConsumed']} kcal\n⏱️ 运动时长: {today_summary['walkTime']} 分")
             else: 
                 print(f"[!] 服务器报错: {res.text}")
                 with open("msg.txt", "w", encoding="utf-8") as f: f.write(f"❌ 万步网同步失败！\n\n服务器返回: {res.text}")
@@ -251,6 +246,45 @@ class HumanGenerator:
             print(f"[!] 网络异常: {e}")
             with open("msg.txt", "w", encoding="utf-8") as f: f.write(f"❌ 万步网同步失败！\n\n网络异常: {e}")
 
+def pick_account():
+    """列出账户并让用户选择，返回选中的 deviceserial"""
+    accts = accounts.list_accounts()
+    if not accts:
+        print("[!] 还没有任何账户。请先运行 start.py 拦截抓包，生成账户后再同步。")
+        sys.exit(1)
+    if len(accts) == 1:
+        return accts[0]["serial"]
+
+    print("=" * 44)
+    print("  多账户模式 - 请选择要同步的账户")
+    print("=" * 44)
+    for i, a in enumerate(accts, 1):
+        label = a["name"] or a["serial"]
+        print(f"  [{i}] {label}   ({accounts.token_status(a['token_age_days'])})")
+    print("=" * 44)
+    choice = input("  请输入序号 [1]: ").strip() or "1"
+    try:
+        return accts[int(choice) - 1]["serial"]
+    except (ValueError, IndexError):
+        print("[!] 无效选择。")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    if os.path.exists("session.json"):
-        with open("session.json", "r", encoding="utf-8") as f: HumanGenerator(json.load(f)).run()
+    # 一次性迁移旧的根目录单账户数据（如果存在）
+    accounts.migrate_legacy()
+
+    if len(sys.argv) > 1:
+        serial = sys.argv[1]
+        if not accounts.session_exists(serial):
+            print(f"[!] 账户 {serial} 不存在，请先运行 start.py 抓包。")
+            sys.exit(1)
+    else:
+        serial = pick_account()
+
+    session = accounts.load_session(serial)
+    if not session:
+        print(f"[!] 账户 {serial} 缺少 session.json，请重新抓包。")
+        sys.exit(1)
+    print(f"[*] 正在同步账户: {session.get('name') or serial}")
+    HumanGenerator(serial, session).run()

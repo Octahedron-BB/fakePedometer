@@ -1,6 +1,6 @@
 .env
 session.json
-my_steps_db.json
+steps_db.json
 captured_history.json
 *.bak
 
